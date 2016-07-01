@@ -1,0 +1,120 @@
+#!/usr/bin/perl 
+use strict;
+require "create_file_hierarchy.pl";
+require "variable.pl";
+
+our (@mergeModalities);
+
+my $directory_path 	= $ARGV[0];
+my $folder_name 	= $ARGV[1]; #cbc_5, cbc_10, cbc_20, cbc_50, cbc_100
+my $run 		= $ARGV[2];
+my $h 			= $ARGV[3];
+
+my @folder_names = split(/,/, $folder_name);
+
+sub trim($)
+{
+	my $string = shift;
+	$string =~ s/^\s+//;
+	$string =~ s/\s+$//;
+	return $string;
+}
+
+sub mergeFeatureVectors
+{
+
+	my($srcPath, $type,$destPath, $destFile,$modalitiesRef, $metaBoolean) = @_;
+	my @modalities = @{$modalitiesRef};
+	if($metaBoolean == 1) ## if merging for meta features, the src fv name is changed just by inserting 'meta'. e.g. sty_train.txt changed to 'sty_meta_train.txt'
+	{ 
+		$type = "meta_$type";
+	}
+	my @mergedValues = ();
+
+	foreach my $m(0..$#modalities)
+	{
+		my @currValue = ();
+		my @currentMerged = ();
+		my $modality = $modalities[$m];
+		#print "${modality}_${type}.txt\n";
+
+		open(FILE,"< $srcPath/${modality}_${type}.txt") or die("Not Found:  $srcPath/${modality}_${type}.txt :$!");  
+		foreach my $line(<FILE>)
+		{
+			push(@currValue,trim($line));
+		}
+		#print join("\t", @currValue)."\n" if ($modality eq "ppl");
+		close(FILE);
+
+		if($m == 0)  ## if first modality, final value will be the value of current modality only
+		{
+			@currentMerged = @currValue;
+		}
+		else ## if not merge current modality values to whatever is in previous value.
+		{
+			for (my $i=0; $i<scalar(@currValue); $i++)
+			{
+				push @currentMerged,"$mergedValues[$i] $currValue[$i]"; 
+			}
+		}
+		@mergedValues = @currentMerged;
+		#print "First $mergedValues[0]\n";
+	}	
+	createNewFolder($destPath) if (!(-e "$destPath"));
+	open(MERGE,"> $destPath/$destFile.txt") or die("Can't create $destPath/$destFile.txt :$! ");
+	print MERGE join("\n", @mergedValues);
+	undef @mergedValues;
+	close(MERGE);
+}
+
+
+sub main
+{
+	foreach my $fname(@folder_names)
+	{
+		my $runPath = "$directory_path$fname/$run";
+
+		my $uniqueClasses = "$runPath/weka/uniqueClasses.txt";
+		createNewFolder("$runPath/weka") if (!(-e "$runPath/weka"));
+
+		my $weka_h = "$runPath/weka/$h";
+		createNewFolder("$weka_h") if (!(-e "$weka_h"));
+
+
+		print"---creating unique classes----\n";
+		system("perl createUniqueClasses.pl $runPath/labels/rclass_train.txt $uniqueClasses");
+
+
+		print "merging $runPath/vocab/ - ";
+		foreach my $i(0..$#mergeModalities)
+		{
+			my @modalities = @{$mergeModalities[$i]};
+			my $merged = join("+",@modalities);
+			print "\t$merged\n";
+		
+			my $pathToWekaFolder = "$weka_h/$merged/classic";
+
+			createNewFolder("$pathToWekaFolder");
+			mergeFeatureVectors("$runPath/fv", "train","$runPath/fv/$merged","classic_train",\@modalities, 0);
+			mergeFeatureVectors("$runPath/fv", "test","$runPath/fv/$merged", "classic_test",\@modalities, 0);
+
+			
+			foreach my $modality(@modalities)
+			{
+				system("perl copy_to_end_of_file.pl $runPath/vocab/${modality}labels.txt  $pathToWekaFolder/classic_labels.txt"); ## merge FLF features to create classic labels.
+			}
+			system("perl arff_creation_ver2.pl $runPath/fv/$merged/classic_train.txt $runPath/labels/rlabel_train.txt $runPath/labels/rclass_train.txt $pathToWekaFolder/classic_labels.txt classic_train $pathToWekaFolder/ $uniqueClasses" );
+			system("perl arff_creation_ver2.pl $runPath/fv/$merged/classic_test.txt $runPath/labels/rlabel_test.txt $runPath/labels/rclass_test.txt $pathToWekaFolder/classic_labels.txt classic_test $pathToWekaFolder/ $uniqueClasses");
+
+		}
+	    
+	}
+}
+
+
+
+
+main();
+
+
+
